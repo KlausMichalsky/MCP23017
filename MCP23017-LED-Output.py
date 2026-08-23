@@ -8,6 +8,7 @@
 #  DESCRIPCION
 #  -----------------------------------------------------------------------
 #  - Prueba las salidas GPIO del MCP23017 mediante I2C.
+#  - Utiliza un Raspberry Pi Pico con MicroPython.
 #  - Detecta el MCP23017 en la dirección I2C 0x20.
 #  - GPA7 controla el LED 1.
 #  - GPB0 controla el LED 2.
