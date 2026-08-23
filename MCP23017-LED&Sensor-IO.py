@@ -138,8 +138,15 @@ while True:
     # --------------------------------------------------------------------
 
     if value_a & 0b01000000:
-        # GPA6 = HIGH → sin imán
-        # Apagar LED GPA7
+        # GPA6 = HIGH → sin imán (DRV5032 es High en reposo)
+        # 🔴 Para APAGAR GPA7 → usamos AND
+        # Queremos forzar GPA7 a 0.
+        # AND + 0 → fuerza a 0
+        # x AND 0 = 0
+        # Para APAGAR GPA7 la mascara es 0b01111111
+        # 01111111
+        # ↑
+        # AND
 
         value_a = value_a & 0b01111111
 
@@ -147,7 +154,14 @@ while True:
 
     else:
         # GPA6 = LOW → imán detectado
-        # Encender LED GPA7
+        # 🟢 Para ENCENDER GPA7 → usamos OR
+        # Queremos forzar GPA7 a 1
+        # OR + 1 → fuerza a 1
+        # x OR 1 = 1
+        # Para ENCENDER GPA7 la mascara es 0b10000000
+        # 10000000
+        # ↑
+        # OR
 
         value_a = value_a | 0b10000000
 
