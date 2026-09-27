@@ -3,67 +3,48 @@ import time
 
 
 # ============================================================
-# 🔹 ONYX-PRO — CHESSBOARD SENSOR CONTROLLER
-# ============================================================
-# Raspberry Pi Pico / MicroPython
-#
-# I2C:
-#   SDA = GPIO 16
-#   SCL = GPIO 17
-#
-# MCP23017:
-#   Board 1 = 0x20
-#   Board 2 = 0x21
-#   Board 3 = 0x22
-#   Board 4 = 0x23
-#
-# UART:
-#   TX = GPIO 4
-#   RX = GPIO 5
-#   UART1 @ 115200
-#
-# Confirm Button:
-#   GPIO 15 -> GND
-#   Internal PULL_UP
-#
-# Hall sensor:
-#   HIGH = EMPTY
-#   LOW  = PIECE PRESENT
+#                 O N Y X - P R O
+#          CHESSBOARD SENSOR CONTROLLER
 # ============================================================
 
 
 # ============================================================
-# I2C
+# CONFIGURACIÓN I2C
 # ============================================================
+
+I2C_ID = 0
+SDA_PIN = 16
+SCL_PIN = 17
+I2C_FREQ = 100000
 
 i2c = I2C(
-    0,
-    sda=Pin(16),
-    scl=Pin(17),
-    freq=100000
+    I2C_ID,
+    scl=Pin(SCL_PIN),
+    sda=Pin(SDA_PIN),
+    freq=I2C_FREQ
 )
 
 
 # ============================================================
-# UART -> RP2040
+# CONFIGURACIÓN UART -> RP2040
 # ============================================================
 
 UART_ID = 1
 UART_BAUD = 115200
-
-TX_PIN = 4
-RX_PIN = 5
+UART_TX = 4
+UART_RX = 5
 
 uart = UART(
     UART_ID,
     baudrate=UART_BAUD,
-    tx=Pin(TX_PIN),
-    rx=Pin(RX_PIN)
+    tx=Pin(UART_TX),
+    rx=Pin(UART_RX)
 )
 
 
 # ============================================================
-# CONFIRM BUTTON
+# BOTÓN FÍSICO DE CONFIRMACIÓN
+# GPIO15 -> BOTÓN -> GND
 # ============================================================
 
 BUTTON_PIN = 15
@@ -76,25 +57,15 @@ button = Pin(
 
 
 # ============================================================
-# MCP23017 ADDRESSES
+# MCP23017
 # ============================================================
 
-MCP_BOARD_1 = 0x20
-MCP_BOARD_2 = 0x21
-MCP_BOARD_3 = 0x22
-MCP_BOARD_4 = 0x23
-
-MCP_BOARDS = [
-    MCP_BOARD_1,
-    MCP_BOARD_2,
-    MCP_BOARD_3,
-    MCP_BOARD_4
+MCP_ADDRESSES = [
+    0x20,
+    0x21,
+    0x22,
+    0x23
 ]
-
-
-# ============================================================
-# MCP23017 REGISTERS
-# ============================================================
 
 IODIRA = 0x00
 IODIRB = 0x01
@@ -104,13 +75,13 @@ GPIOB = 0x13
 
 
 # ============================================================
-# PHYSICAL BOARD MAPPING
+# MAPEO FÍSICO DE LAS 4 PLACAS
 # ============================================================
 
 BOARD_SQUARES = [
 
     # --------------------------------------------------------
-    # BOARD 1 -> 0x20
+    # PLACA 1 -> 0x20
     # --------------------------------------------------------
     [
         "A1", "B1", "C1", "D1",
@@ -120,7 +91,7 @@ BOARD_SQUARES = [
     ],
 
     # --------------------------------------------------------
-    # BOARD 2 -> 0x21
+    # PLACA 2 -> 0x21
     # --------------------------------------------------------
     [
         "E1", "F1", "G1", "H1",
@@ -130,7 +101,7 @@ BOARD_SQUARES = [
     ],
 
     # --------------------------------------------------------
-    # BOARD 3 -> 0x22
+    # PLACA 3 -> 0x22
     # --------------------------------------------------------
     [
         "H8", "G8", "F8", "E8",
@@ -140,7 +111,7 @@ BOARD_SQUARES = [
     ],
 
     # --------------------------------------------------------
-    # BOARD 4 -> 0x23
+    # PLACA 4 -> 0x23
     # --------------------------------------------------------
     [
         "D8", "C8", "B8", "A8",
@@ -152,133 +123,129 @@ BOARD_SQUARES = [
 
 
 # ============================================================
-# SENSOR -> CHESS SQUARE
+# CLASE MCP23017
 # ============================================================
 
-SENSOR_TO_SQUARE = {}
+class MCP23017:
 
-sensor_number = 0
+    def __init__(self, i2c, address):
+
+        self.i2c = i2c
+        self.address = address
+
+    def write_register(self, register, value):
+
+        self.i2c.writeto_mem(
+            self.address,
+            register,
+            bytes([value])
+        )
+
+    def read_register(self, register):
+
+        return self.i2c.readfrom_mem(
+            self.address,
+            register,
+            1
+        )[0]
+
+    def setup_inputs(self):
+
+        self.write_register(
+            IODIRA,
+            0xFF
+        )
+
+        self.write_register(
+            IODIRB,
+            0xFF
+        )
+
+    def read_gpio(self):
+
+        value_a = self.read_register(GPIOA)
+        value_b = self.read_register(GPIOB)
+
+        return value_a, value_b
+
+
+# ============================================================
+# INICIALIZAR MCP
+# ============================================================
+
+mcps = []
+
+for address in MCP_ADDRESSES:
+
+    mcp = MCP23017(
+        i2c,
+        address
+    )
+
+    mcp.setup_inputs()
+
+    mcps.append(mcp)
+
+
+# ============================================================
+# ESTADO DEL TABLERO
+#
+# False = vacío
+# True  = ocupado
+# ============================================================
+
+board_state = {}
 
 for board in BOARD_SQUARES:
+
     for square in board:
-        SENSOR_TO_SQUARE[sensor_number] = square
-        sensor_number += 1
+
+        board_state[square] = False
 
 
 # ============================================================
-# BOARD STATE
+# LEER TODOS LOS SENSORES
 # ============================================================
 
-# False = empty
-# True  = occupied
+def read_all_sensors():
 
-board_state = [False] * 64
+    for board_index in range(4):
 
+        value_a, value_b = mcps[
+            board_index
+        ].read_gpio()
 
-# ============================================================
-# PREVIOUS MCP VALUES
-# ============================================================
+        squares = BOARD_SQUARES[
+            board_index
+        ]
 
-previous_a = [0xFF] * 4
-previous_b = [0xFF] * 4
+        # GPIOA -> sensores 0..7
 
-
-# ============================================================
-# MOVEMENT STATE MACHINE
-# ============================================================
-
-# Original square of the moving piece
-move_from = None
-
-# Current destination candidate
-move_to = None
-
-# True after the original square has been detected
-move_active = False
-
-
-# ============================================================
-# I2C HELPERS
-# ============================================================
-
-def write_register(address, register, value):
-
-    i2c.writeto_mem(
-        address,
-        register,
-        bytes([value])
-    )
-
-
-def read_register(address, register):
-
-    data = i2c.readfrom_mem(
-        address,
-        register,
-        1
-    )
-
-    return data[0]
-
-
-# ============================================================
-# CONFIGURE MCP23017
-# ============================================================
-
-def configure_mcp(address):
-
-    # All GPIO as inputs
-    write_register(address, IODIRA, 0xFF)
-    write_register(address, IODIRB, 0xFF)
-
-
-# ============================================================
-# INITIAL BOARD READ
-# ============================================================
-
-def initialize_board():
-
-    print()
-    print("========================================")
-    print(" INITIALIZING BOARD")
-    print("========================================")
-
-    for board_index, address in enumerate(MCP_BOARDS):
-
-        value_a = read_register(address, GPIOA)
-        value_b = read_register(address, GPIOB)
-
-        base_sensor = board_index * 16
-
-        # GPIOA -> sensors 0-7
         for bit in range(8):
 
-            sensor = base_sensor + bit
+            square = squares[bit]
 
-            # LOW = magnet detected
-            occupied = not bool(value_a & (1 << bit))
+            occupied = not bool(
+                value_a & (1 << bit)
+            )
 
-            board_state[sensor] = occupied
+            board_state[square] = occupied
 
-        # GPIOB -> sensors 8-15
+        # GPIOB -> sensores 8..15
+
         for bit in range(8):
 
-            sensor = base_sensor + 8 + bit
+            square = squares[bit + 8]
 
-            # LOW = magnet detected
-            occupied = not bool(value_b & (1 << bit))
+            occupied = not bool(
+                value_b & (1 << bit)
+            )
 
-            board_state[sensor] = occupied
-
-        previous_a[board_index] = value_a
-        previous_b[board_index] = value_b
-
-    print("Board initialized.")
-    print()
+            board_state[square] = occupied
 
 
 # ============================================================
-# PRINT BOARD
+# MOSTRAR TABLERO
 # ============================================================
 
 def print_board():
@@ -286,127 +253,325 @@ def print_board():
     print()
     print("--------------- BOARD ----------------")
 
-    for rank in range(7, -1, -1):
+    for rank in range(8, 0, -1):
 
-        row = ""
+        line = str(rank) + " | "
 
         for file_index in range(8):
 
-            sensor = rank * 8 + file_index
+            file_letter = chr(
+                ord("A") + file_index
+            )
 
-            if board_state[sensor]:
-                row += "X "
+            square = (
+                file_letter +
+                str(rank)
+            )
+
+            if board_state[square]:
+
+                line += "X "
+
             else:
-                row += ". "
 
-        print("{} | {}".format(rank + 1, row))
+                line += ". "
 
-    print("    A B C D E F G H")
-    print("---------------------------------------")
+        print(line)
+
+    print(
+        "    A B C D E F G H"
+    )
+
+    print(
+        "---------------------------------------"
+    )
+
     print()
 
 
 # ============================================================
-# SENSOR CHANGE HANDLER
+# ESTADO ANTERIOR
 # ============================================================
 
-def update_square(sensor_number, occupied):
+read_all_sensors()
+
+previous_state = {}
+
+for square in board_state:
+
+    previous_state[square] = (
+        board_state[square]
+    )
+
+
+# ============================================================
+# ESTADO DEL MOVIMIENTO
+# ============================================================
+
+move_from = None
+move_to = None
+move_active = False
+
+pending_empty = None
+capture_square = None
+
+
+# ============================================================
+# BLOQUEAR ORIGEN
+# ============================================================
+
+def lock_origin(square):
+
+    global move_from
+    global move_active
+
+    move_from = square
+    move_active = True
+
+    print()
+    print(
+        "🔒 ORIGIN LOCKED ->",
+        move_from
+    )
+
+
+# ============================================================
+# ACTUALIZAR CASILLA
+# ============================================================
+
+def update_square(
+    square,
+    occupied
+):
 
     global move_from
     global move_to
     global move_active
+    global pending_empty
+    global capture_square
 
-    square = SENSOR_TO_SQUARE[sensor_number]
-
-    # --------------------------------------------------------
-    # Update physical board state
-    # --------------------------------------------------------
-
-    board_state[sensor_number] = occupied
+    board_state[square] = occupied
 
     # ========================================================
-    # PIECE REMOVED
+    # CASILLA QUEDA VACÍA
     # ========================================================
 
     if not occupied:
 
-        print("EMPTY  -> {}".format(square))
-
         # ----------------------------------------------------
-        # No movement currently active.
-        #
-        # The FIRST square that becomes empty is the origin.
+        # TODAVÍA NO HAY MOVIMIENTO ACTIVO
         # ----------------------------------------------------
 
         if not move_active:
 
-            move_from = square
-            move_to = None
-            move_active = True
+            # Primera casilla vacía
+            if pending_empty is None:
 
-            print()
-            print("🔒 ORIGIN LOCKED -> {}".format(move_from))
-            print("   Move the piece freely...")
-            print()
+                pending_empty = square
+
+                print()
+                print(
+                    "⏳ EMPTY PENDING ->",
+                    square
+                )
+
+            # Segunda casilla vacía
+            else:
+
+                first_empty = (
+                    pending_empty
+                )
+
+                # La segunda vacía es el
+                # origen de la pieza atacante
+                lock_origin(square)
+
+                # La primera vacía es la pieza
+                # que fue retirada/capturada
+                capture_square = (
+                    first_empty
+                )
+
+                print(
+                    "⚔️ CAPTURE SEQUENCE DETECTED"
+                )
+
+                print(
+                    "⚔️ CAPTURE SQUARE ->",
+                    capture_square
+                )
+
+                pending_empty = None
 
         # ----------------------------------------------------
-        # Movement already active.
-        #
-        # If the current destination becomes empty, the piece
-        # has moved away from that candidate.
-        #
-        # IMPORTANT:
-        # The origin NEVER changes here.
+        # MOVIMIENTO YA ACTIVO
         # ----------------------------------------------------
 
         else:
 
-            if square == move_to:
+            # El origen jamás cambia
+            if square == move_from:
 
-                print(
-                    "DESTINATION LEFT -> {}".format(square)
-                )
+                return
+
+            # El destino anterior quedó vacío
+            if square == move_to:
 
                 move_to = None
 
+                print(
+                    "↩️ DESTINATION CLEARED ->",
+                    square
+                )
+
+                return
+
+            # Posible casilla de captura
+            if capture_square is None:
+
+                capture_square = square
+
+                print(
+                    "⚔️ CAPTURE CANDIDATE ->",
+                    square
+                )
+
     # ========================================================
-    # PIECE DETECTED
+    # CASILLA QUEDA OCUPADA
     # ========================================================
 
     else:
 
-        print("OCCUPIED -> {}".format(square))
-
         # ----------------------------------------------------
-        # If movement is active, this square becomes the
-        # current destination candidate.
+        # NO HAY MOVIMIENTO ACTIVO
         # ----------------------------------------------------
 
-        if move_active:
+        if not move_active:
 
-            # Never allow the original square to become
-            # the destination.
-            if square != move_from:
+            if pending_empty is not None:
+
+                # La casilla que quedó vacía
+                # era el origen
+
+                origin = pending_empty
+
+                pending_empty = None
+
+                lock_origin(origin)
 
                 move_to = square
 
+                print()
                 print(
-                    "🎯 DESTINATION CANDIDATE -> {}".format(
-                        move_to
-                    )
+                    "🎯 DESTINATION CANDIDATE ->",
+                    move_to
+                )
+
+        # ----------------------------------------------------
+        # MOVIMIENTO ACTIVO
+        # ----------------------------------------------------
+
+        else:
+
+            # El origen no puede ser destino
+            if square == move_from:
+
+                return
+
+            # Si vuelve a ocuparse la casilla
+            # de captura
+            if square == capture_square:
+
+                move_to = square
+
+                print()
+                print(
+                    "⚔️ CAPTURE DESTINATION ->",
+                    move_to
+                )
+
+            else:
+
+                move_to = square
+
+                print()
+                print(
+                    "🎯 DESTINATION CANDIDATE ->",
+                    move_to
                 )
 
 
 # ============================================================
-# BUTTON
+# CONFIRMAR MOVIMIENTO
+# ============================================================
+
+def confirm_move():
+
+    global move_from
+    global move_to
+    global move_active
+    global pending_empty
+    global capture_square
+
+    if (
+        move_active
+        and
+        move_from is not None
+        and
+        move_to is not None
+    ):
+
+        move = (
+            move_from +
+            move_to
+        )
+
+        print()
+        print(
+            "♟️ MOVE CONFIRMED"
+        )
+
+        print(
+            "UART ->",
+            move
+        )
+
+        uart.write(
+            move + "\n"
+        )
+
+        # ----------------------------------------------------
+        # RESET
+        # ----------------------------------------------------
+
+        move_from = None
+        move_to = None
+        move_active = False
+
+        pending_empty = None
+        capture_square = None
+
+        print(
+            "✅ READY FOR NEXT MOVE"
+        )
+
+    else:
+
+        print()
+        print(
+            "⚠️ BUTTON PRESSED - "
+            "NO COMPLETE MOVE"
+        )
+
+
+# ============================================================
+# BOTÓN
 # ============================================================
 
 def button_pressed():
 
-    # Button pressed = LOW
     if button.value() == 0:
 
-        # Simple debounce
         time.sleep_ms(50)
 
         if button.value() == 0:
@@ -416,273 +581,116 @@ def button_pressed():
     return False
 
 
-# ============================================================
-# WAIT FOR BUTTON RELEASE
-# ============================================================
-
 def wait_button_release():
 
     while button.value() == 0:
+
         time.sleep_ms(10)
 
 
 # ============================================================
-# CONFIRM MOVEMENT
-# ============================================================
-
-def confirm_move():
-
-    global move_from
-    global move_to
-    global move_active
-
-    # --------------------------------------------------------
-    # No active movement
-    # --------------------------------------------------------
-
-    if not move_active:
-
-        print()
-        print("⚠️  No movement detected.")
-        print()
-
-        return
-
-    # --------------------------------------------------------
-    # Origin exists, but destination does not
-    # --------------------------------------------------------
-
-    if move_from is None:
-
-        print()
-        print("⚠️  No origin.")
-        print()
-
-        return
-
-    if move_to is None:
-
-        print()
-        print(
-            "⚠️  Origin = {}".format(move_from)
-        )
-        print(
-            "⚠️  Waiting for destination..."
-        )
-        print()
-
-        return
-
-    # ========================================================
-    # FINAL MOVE
-    # ========================================================
-
-    move = move_from + move_to
-
-    print()
-    print("========================================")
-    print("♟️  MOVE CONFIRMED")
-    print("========================================")
-    print("FROM : {}".format(move_from))
-    print("TO   : {}".format(move_to))
-    print("MOVE : {}".format(move))
-    print("========================================")
-    print()
-
-    # --------------------------------------------------------
-    # Send to RP2040
-    # --------------------------------------------------------
-
-    uart.write(move + "\n")
-
-    print("UART -> {}".format(move))
-
-    # ========================================================
-    # RESET MOVEMENT STATE
-    # ========================================================
-
-    move_from = None
-    move_to = None
-    move_active = False
-
-    print("Movement state reset.")
-    print()
-
-    print_board()
-
-
-# ============================================================
-# I2C SCAN
+# INICIO
 # ============================================================
 
 print()
-print("========================================")
-print(" ONYX-PRO SENSOR CONTROLLER")
-print("========================================")
+print("================================================")
+print("              O N Y X - P R O")
+print("          CHESSBOARD CONTROLLER")
+print("================================================")
 
 print()
-print("I2C scan:")
-
-devices = i2c.scan()
-
-for address in devices:
-
-    print(
-        "  Found: 0x{:02X}".format(address)
-    )
+print("I2C SCAN:")
+print(i2c.scan())
 
 print()
 
+for address in MCP_ADDRESSES:
 
-# ============================================================
-# CHECK MCP BOARDS
-# ============================================================
-
-for address in MCP_BOARDS:
-
-    if address in devices:
+    if address in i2c.scan():
 
         print(
-            "MCP23017 OK -> 0x{:02X}".format(address)
+            "✅ MCP23017 encontrado:",
+            hex(address)
         )
-
-        configure_mcp(address)
 
     else:
 
         print(
-            "WARNING: MCP23017 NOT FOUND -> 0x{:02X}".format(
-                address
-            )
+            "❌ MCP23017 NO encontrado:",
+            hex(address)
         )
 
 
-print()
-
-
 # ============================================================
-# INITIAL BOARD STATE
+# ESTADO INICIAL
 # ============================================================
 
-initialize_board()
+read_all_sensors()
 
 print_board()
 
 
 # ============================================================
-# MAIN LOOP
+# READY
 # ============================================================
 
-print("========================================")
-print(" READY")
-print("========================================")
-print()
-print("Move a piece.")
-print("The first empty square becomes the origin.")
-print("The latest occupied square becomes the destination.")
-print("Press GPIO 15 button to confirm.")
+print(
+    "🚀 SENSOR SYSTEM READY"
+)
+
 print()
 
+
+# ============================================================
+# LOOP PRINCIPAL
+# ============================================================
 
 while True:
 
-    # ========================================================
-    # READ ALL FOUR MCP23017
-    # ========================================================
+    # --------------------------------------------------------
+    # Leer sensores
+    # --------------------------------------------------------
 
-    for board_index, address in enumerate(MCP_BOARDS):
+    read_all_sensors()
 
-        try:
+    # --------------------------------------------------------
+    # Detectar cambios
+    # --------------------------------------------------------
 
-            value_a = read_register(
-                address,
-                GPIOA
-            )
+    for square in board_state:
 
-            value_b = read_register(
-                address,
-                GPIOB
-            )
+        current = board_state[square]
 
-        except Exception as e:
+        previous = previous_state[square]
+
+        if current != previous:
 
             print(
-                "I2C ERROR on 0x{:02X}: {}".format(
-                    address,
-                    e
-                )
+                "CHANGE:",
+                square,
+                "->",
+                "X" if current else "."
             )
 
-            continue
+            update_square(
+                square,
+                current
+            )
 
-        base_sensor = board_index * 16
+            previous_state[square] = current
 
-        # ====================================================
-        # GPIO A
-        # ====================================================
-
-        changed_a = value_a ^ previous_a[board_index]
-
-        if changed_a:
-
-            for bit in range(8):
-
-                if changed_a & (1 << bit):
-
-                    sensor = base_sensor + bit
-
-                    occupied = not bool(
-                        value_a & (1 << bit)
-                    )
-
-                    update_square(
-                        sensor,
-                        occupied
-                    )
-
-        # ====================================================
-        # GPIO B
-        # ====================================================
-
-        changed_b = value_b ^ previous_b[board_index]
-
-        if changed_b:
-
-            for bit in range(8):
-
-                if changed_b & (1 << bit):
-
-                    sensor = base_sensor + 8 + bit
-
-                    occupied = not bool(
-                        value_b & (1 << bit)
-                    )
-
-                    update_square(
-                        sensor,
-                        occupied
-                    )
-
-        # ====================================================
-        # SAVE CURRENT VALUES
-        # ====================================================
-
-        previous_a[board_index] = value_a
-        previous_b[board_index] = value_b
-
-    # ========================================================
-    # CHECK CONFIRM BUTTON
-    # ========================================================
+    # --------------------------------------------------------
+    # Botón de confirmación
+    # --------------------------------------------------------
 
     if button_pressed():
 
         confirm_move()
 
-        # Wait until user releases button
         wait_button_release()
 
-    # ========================================================
-    # SMALL LOOP DELAY
-    # ========================================================
+    # --------------------------------------------------------
+    # LOOP DEL SISTEMA
+    # --------------------------------------------------------
 
     time.sleep_ms(20)
