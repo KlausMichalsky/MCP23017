@@ -46,7 +46,7 @@ uart = UART(
 # BOTON DE CONFIRMACION
 # ============================================================
 
-BUTTON_PIN = 15
+BUTTON_PIN = 18
 
 button = Pin(
     BUTTON_PIN,
